@@ -225,8 +225,9 @@ struct P2R_SymbolStreamConvertOut
 typedef struct P2R_BuildBakeStringMapIn P2R_BuildBakeStringMapIn;
 struct P2R_BuildBakeStringMapIn
 {
-  RDIM_BakePathTree *path_tree;
-  RDIM_BakeParams *params;
+  RDIM_Guard *guard;
+  RDIM_BakeStringMap *strings;
+  void *input;
 };
 
 typedef struct P2R_BuildBakeNameMapIn P2R_BuildBakeNameMapIn;
@@ -409,7 +410,15 @@ internal P2R_Convert2Bake *p2r_convert(Arena *arena, P2R_User2Convert *in);
 //~ rjf: Baking Stage Tasks
 
 //- rjf: pass 1: interner/deduper map builds
-internal void *p2r_build_bake_string_map_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_top_level_info_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_binary_sections_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_src_file_chunk_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_unit_chunk_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_type_chunk_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_udt_chunk_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_bake_path_tree_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_symbol_chunk_task__entry_point(Arena *arena, void *p);
+internal void *p2r_build_bake_string_map_scope_chunk_task__entry_point(Arena *arena, void *p);
 internal void *p2r_build_bake_name_map_task__entry_point(Arena *arena, void *p);
 
 //- rjf: pass 2: string-map-dependent debug info stream builds

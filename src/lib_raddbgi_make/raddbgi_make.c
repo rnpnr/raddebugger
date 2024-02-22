@@ -122,6 +122,12 @@ rdim_scratch_end_fallback(RDIM_Temp temp)
 
 #endif
 
+//- rjf: asynchronous guard
+
+#if !defined(RDIM_GUARD_OVERRIDE)
+RDI_PROC void rdim_guard_scope_noop(RDIM_Guard *guard, U64 hash) {}
+#endif
+
 //- rjf: strings
 
 RDI_PROC RDIM_String8
@@ -1212,62 +1218,82 @@ rdim_bake_vmap_from_markers(RDIM_Arena *arena, RDIM_VMapMarker *markers, RDIM_So
 ////////////////////////////////
 //~ rjf: [Baking Helpers] Interned / Deduplicated Blob Data Structure Helpers
 
-//- rjf: bake string map reading/writing
+//- rjf: bake string map reading/writing high-level helpers
+
+RDI_PROC RDIM_BakeStringMap *
+rdim_bake_string_map_make(RDIM_Arena *arena, RDI_U64 slot_count)
+{
+  RDIM_BakeStringMap *strings = rdim_push_array(arena, RDIM_BakeStringMap, 1);
+  strings->slots_count = slot_count;
+  strings->slots = rdim_push_array(arena, RDIM_BakeStringSlot, strings->slots_count);
+  {
+    RDI_U64 hash = rdi_hash(0, 0);
+    RDI_U64 slot_idx = hash%strings->slots_count;
+    RDIM_BakeStringNode *node = rdim_push_array(arena, RDIM_BakeStringNode, 1);
+    node->string = rdim_str8_lit("");
+    node->hash = hash;
+    strings->count += 1;
+    RDIM_SLLStackPush_N(strings->slots[slot_idx].first, node, hash_next);
+  }
+  return strings;
+}
+
+RDI_PROC void
+rdim_bake_string_map_insert(RDIM_Guard *guard, RDIM_BakeStringMap *map, RDIM_String8 string)
+{
+  if(string.RDIM_String8_SizeMember == 0) { return; }
+  RDI_U64 hash = rdi_hash(string.RDIM_String8_BaseMember, string.RDIM_String8_SizeMember);
+  RDI_U64 slot_idx = hash%map->slots_count;
+  RDIM_GuardScopeR(guard, hash)
+  {
+    // rjf: find existing node
+    RDIM_BakeStringNode *node = 0;
+    for(RDIM_BakeStringNode *n = map->slots[slot_idx]; n != 0; n = n->hash_next)
+    {
+      if(n->hash == hash && rdim_str8_match(n->string, string, 0))
+      {
+        node = n;
+        break;
+      }
+    }
+    
+    // rjf: no node -> make new node
+    if(node == 0) RDIM_GuardScopeRWPromote(guard, hash)
+    {
+      RDIM_Arena *arena = rdim_arena_from_guard_hash(guard, hash);
+      node = rdim_push_array(arena, RDIM_BakeStringNode, 1);
+      node->string = string;
+      node->hash = hash;
+      map->count += 1;
+      RDIM_SLLQueuePush_N(map->order_first, map->order_last, node, order_next);
+      RDIM_SLLStackPush_N(map->slots[slot_idx], node, hash_next);
+      map->slot_collision_count += (node->hash_next != 0);
+    }
+  }
+}
 
 RDI_PROC RDI_U32
 rdim_bake_idx_from_string(RDIM_BakeStringMap *map, RDIM_String8 string)
 {
+  if(string.RDIM_String8_SizeMember == 0) { return 0; }
   RDI_U64 hash = rdi_hash(string.RDIM_String8_BaseMember, string.RDIM_String8_SizeMember);
   RDI_U64 slot_idx = hash%map->slots_count;
-  
-  // rjf: find existing node
-  RDIM_BakeStringNode *node = 0;
-  for(RDIM_BakeStringNode *n = map->slots[slot_idx]; n != 0; n = n->hash_next)
+  RDI_U32 result = 0;
   {
-    if(n->hash == hash && rdim_str8_match(n->string, string, 0))
+    // rjf: find existing node
+    RDIM_BakeStringNode *node = 0;
+    for(RDIM_BakeStringNode *n = map->slots[slot_idx]; n != 0; n = n->hash_next)
     {
-      node = n;
-      break;
+      if(n->hash == hash && rdim_str8_match(n->string, string, 0))
+      {
+        node = n;
+        break;
+      }
     }
+    
+    // rjf: node -> index
+    result = node ? node->idx : 0;
   }
-  
-  // rjf: node -> index
-  RDI_U32 result = node ? node->idx : 0;
-  return result;
-}
-
-RDI_PROC RDI_U32
-rdim_bake_string_map_insert(RDIM_Arena *arena, RDIM_BakeStringMap *map, RDIM_String8 string)
-{
-  RDI_U64 hash = rdi_hash(string.RDIM_String8_BaseMember, string.RDIM_String8_SizeMember);
-  RDI_U64 slot_idx = hash%map->slots_count;
-  
-  // rjf: find existing node
-  RDIM_BakeStringNode *node = 0;
-  for(RDIM_BakeStringNode *n = map->slots[slot_idx]; n != 0; n = n->hash_next)
-  {
-    if(n->hash == hash && rdim_str8_match(n->string, string, 0))
-    {
-      node = n;
-      break;
-    }
-  }
-  
-  // rjf: no node -> make new node
-  if(node == 0)
-  {
-    node = rdim_push_array(arena, RDIM_BakeStringNode, 1);
-    node->string = rdim_str8_copy(arena, string);
-    node->hash   = hash;
-    node->idx    = map->count;
-    map->count += 1;
-    RDIM_SLLQueuePush_N(map->order_first, map->order_last, node, order_next);
-    RDIM_SLLStackPush_N(map->slots[slot_idx], node, hash_next);
-    map->slot_collision_count += (node->hash_next != 0);
-  }
-  
-  // rjf: node -> index
-  RDI_U32 result = node->idx;
   return result;
 }
 
@@ -1590,139 +1616,100 @@ rdim_bake_section_list_concat_in_place(RDIM_BakeSectionList *dst, RDIM_BakeSecti
 ////////////////////////////////
 //~ rjf: [Baking] Build Artifacts -> Interned/Deduplicated Data Structures
 
-//- rjf: bake string map from params
+//- rjf: independent bake string map building workloads
 
-RDI_PROC RDIM_BakeStringMap *
-rdim_bake_string_map_from_params(RDIM_Arena *arena, RDIM_BakePathTree *path_tree, RDIM_BakeParams *params)
+RDI_PROC void
+rdim_bake_string_map_push_top_level_info(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_TopLevelInfo *top_level_info)
 {
-  //- rjf: set up map
-  RDIM_BakeStringMap *strings = rdim_push_array(arena, RDIM_BakeStringMap, 1);
-  strings->slots_count = params->procedures.total_count*2 + params->global_variables.total_count*2 + params->thread_variables.total_count*2 + params->types.total_count*2;
-  strings->slots = rdim_push_array(arena, RDIM_BakeStringNode *, strings->slots_count);
-  rdim_bake_string_map_insert(arena, strings, rdim_str8_lit(""));
-  
-  //- rjf: bake exe name
-  rdim_bake_string_map_insert(arena, strings, params->top_level_info.exe_name);
-  
-  //- rjf: bake binary section names
-  for(RDIM_BinarySectionNode *n = params->binary_sections.first; n != 0; n = n->next)
+  rdim_bake_string_map_insert(guard, strings, top_level_info->exe_name);
+}
+
+RDI_PROC void
+rdim_bake_string_map_push_binary_sections(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_BinarySectionList *binary_sections)
+{
+  for(RDIM_BinarySectionNode *n = binary_sections->first; n != 0; n = n->next)
   {
-    rdim_bake_string_map_insert(arena, strings, n->v.name);
+    rdim_bake_string_map_insert(guard, strings, n->v.name);
   }
-  
-  //- rjf: bake source file normalized full paths
-  for(RDIM_SrcFileChunkNode *n = params->src_files.first; n != 0; n = n->next)
+}
+
+RDI_PROC void
+rdim_bake_string_map_push_src_file_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_SrcFileChunkNode *chunk)
+{
+  for(RDI_U64 idx = 0; idx < chunk->count; idx += 1)
   {
-    for(RDI_U64 idx = 0; idx < n->count; idx += 1)
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].normal_full_path);
+  }
+}
+
+RDI_PROC void
+rdim_bake_string_map_push_unit_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_UnitChunkNode *chunk)
+{
+  for(RDI_U64 idx = 0; idx < chunk->count; idx += 1)
+  {
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].unit_name);
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].compiler_name);
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].source_file);
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].object_file);
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].archive_file);
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].build_path);
+  }
+}
+
+RDI_PROC void
+rdim_bake_string_map_push_type_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_TypeChunkNode *chunk)
+{
+  for(RDI_U64 idx = 0; idx < chunk->count; idx += 1)
+  {
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].name);
+  }
+}
+
+RDI_PROC void
+rdim_bake_string_map_push_udt_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_UDTChunkNode *chunk)
+{
+  for(RDI_U64 idx = 0; idx < chunk->count; idx += 1)
+  {
+    for(RDIM_UDTMember *mem = chunk->v[idx].first_member; mem != 0; mem = mem->next)
     {
-      rdim_bake_string_map_insert(arena, strings, n->v[idx].normal_full_path);
+      rdim_bake_string_map_insert(guard, strings, mem->name);
+    }
+    for(RDIM_UDTEnumVal *mem = chunk->v[idx].first_enum_val; mem != 0; mem = mem->next)
+    {
+      rdim_bake_string_map_insert(guard, strings, mem->name);
     }
   }
-  
-  //- rjf: bake file path parts
+}
+
+RDI_PROC void
+rdim_bake_string_map_push_bake_path_tree(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_BakePathTree *path_tree)
+{
   for(RDIM_BakePathNode *n = path_tree->first; n != 0; n = n->next_order)
   {
-    rdim_bake_string_map_insert(arena, strings, n->name);
+    rdim_bake_string_map_insert(guard, strings, n->name);
   }
-  
-  //- rjf: bake unit strings
-  RDIM_ProfScope("bake unit strings")
+}
+
+RDI_PROC void
+rdim_bake_string_map_push_symbol_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_SymbolChunkNode *chunk)
+{
+  for(RDI_U64 idx = 0; idx < chunk->count; idx += 1)
   {
-    for(RDIM_UnitChunkNode *n = params->units.first; n != 0; n = n->next)
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].name);
+    rdim_bake_string_map_insert(guard, strings, chunk->v[idx].link_name);
+  }
+}
+
+RDI_PROC void
+rdim_bake_string_map_push_scope_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_ScopeChunkNode *chunk)
+{
+  for(RDI_U64 idx = 0; idx < chunk->count; idx += 1)
+  {
+    for(RDIM_Local *local = chunk->v[idx].first_local; local != 0; local = local->next)
     {
-      for(RDI_U64 idx = 0; idx < n->count; idx += 1)
-      {
-        rdim_bake_string_map_insert(arena, strings, n->v[idx].unit_name);
-        rdim_bake_string_map_insert(arena, strings, n->v[idx].compiler_name);
-        rdim_bake_string_map_insert(arena, strings, n->v[idx].source_file);
-        rdim_bake_string_map_insert(arena, strings, n->v[idx].object_file);
-        rdim_bake_string_map_insert(arena, strings, n->v[idx].archive_file);
-        rdim_bake_string_map_insert(arena, strings, n->v[idx].build_path);
-      }
+      rdim_bake_string_map_insert(guard, strings, local->name);
     }
   }
-  
-  //- rjf: bake type strings
-  RDIM_ProfScope("bake type strings")
-  {
-    for(RDIM_TypeChunkNode *n = params->types.first; n != 0; n = n->next)
-    {
-      for(RDI_U64 idx = 0; idx < n->count; idx += 1)
-      {
-        rdim_bake_string_map_insert(arena, strings, n->v[idx].name);
-      }
-    }
-  }
-  
-  //- rjf: bake udt member names
-  RDIM_ProfScope("bake udt member names")
-  {
-    for(RDIM_UDTChunkNode *n = params->udts.first; n != 0; n = n->next)
-    {
-      for(RDI_U64 idx = 0; idx < n->count; idx += 1)
-      {
-        for(RDIM_UDTMember *mem = n->v[idx].first_member; mem != 0; mem = mem->next)
-        {
-          rdim_bake_string_map_insert(arena, strings, mem->name);
-        }
-        for(RDIM_UDTEnumVal *mem = n->v[idx].first_enum_val; mem != 0; mem = mem->next)
-        {
-          rdim_bake_string_map_insert(arena, strings, mem->name);
-        }
-      }
-    }
-  }
-  
-  //- rjf: bake src file names
-  RDIM_ProfScope("bake src file names")
-  {
-    for(RDIM_SrcFileChunkNode *n = params->src_files.first; n != 0; n = n->next)
-    {
-      for(RDI_U64 idx = 0; idx < n->count; idx += 1)
-      {
-        rdim_bake_string_map_insert(arena, strings, n->v[idx].normal_full_path);
-      }
-    }
-  }
-  
-  //- rjf: bake symbol names
-  RDIM_ProfScope("bake symbol names")
-  {
-    RDIM_SymbolChunkList *symbol_lists[] =
-    {
-      &params->global_variables,
-      &params->thread_variables,
-      &params->procedures,
-    };
-    for(RDI_U64 list_idx = 0; list_idx < sizeof(symbol_lists)/sizeof(symbol_lists[0]); list_idx += 1)
-    {
-      for(RDIM_SymbolChunkNode *n = symbol_lists[list_idx]->first; n != 0; n = n->next)
-      {
-        for(RDI_U64 idx = 0; idx < n->count; idx += 1)
-        {
-          rdim_bake_string_map_insert(arena, strings, n->v[idx].name);
-          rdim_bake_string_map_insert(arena, strings, n->v[idx].link_name);
-        }
-      }
-    }
-  }
-  
-  //- rjf: bake scope names
-  RDIM_ProfScope("bake scope names")
-  {
-    for(RDIM_ScopeChunkNode *n = params->scopes.first; n != 0; n = n->next)
-    {
-      for(RDI_U64 idx = 0; idx < n->count; idx += 1)
-      {
-        for(RDIM_Local *local = n->v[idx].first_local; local != 0; local = local->next)
-        {
-          rdim_bake_string_map_insert(arena, strings, local->name);
-        }
-      }
-    }
-  }
-  
-  return strings;
 }
 
 //- rjf: bake name map building

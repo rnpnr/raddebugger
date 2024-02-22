@@ -8,6 +8,15 @@ ts_ticket_zero(void)
   return ticket;
 }
 
+internal void
+ts_ticket_list_push(Arena *arena, TS_TicketList *list, TS_Ticket ticket)
+{
+  TS_TicketNode *n = push_array(arena, TS_TicketNode, 1);
+  n->v = ticket;
+  SLLQueuePush(list->first, list->last, n);
+  list->count += 1;
+}
+
 ////////////////////////////////
 //~ rjf: Top-Level Layer Initialization
 
@@ -27,7 +36,7 @@ ts_init(void)
     ts_shared->artifact_stripes[idx].cv = os_condition_variable_alloc();
     ts_shared->artifact_stripes[idx].rw_mutex = os_rw_mutex_alloc();
   }
-  ts_shared->u2t_ring_size = KB(256);
+  ts_shared->u2t_ring_size = KB(1024);
   ts_shared->u2t_ring_base = push_array_no_zero(arena, U8, ts_shared->u2t_ring_size);
   ts_shared->u2t_ring_mutex = os_mutex_alloc();
   ts_shared->u2t_ring_cv = os_condition_variable_alloc();

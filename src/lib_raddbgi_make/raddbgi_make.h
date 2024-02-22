@@ -16,22 +16,22 @@
 
 ////////////////////////////////
 //~ rjf: Overrideable Memory Operations
-
+//
 // To override the slow/default memset implementation used by the library,
 // do the following:
 //
 // #define RDIM_MEMSET_OVERRIDE
 // #define rdim_memset <name of memset implementation>
-
-#if !defined(rdim_memset)
-# define rdim_memset rdim_memset_fallback
-#endif
-
+//
 // To override the slow/default memcpy implementation used by the library,
 // do the following:
 //
 // #define RDIM_MEMCPY_OVERRIDE
 // #define rdim_memcpy <name of memcpy implementation>
+
+#if !defined(rdim_memset)
+# define rdim_memset rdim_memset_fallback
+#endif
 
 #if !defined(rdim_memset)
 # define rdim_memset rdim_memset_fallback
@@ -51,14 +51,14 @@
 
 ////////////////////////////////
 //~ rjf: Overrideable String View Types
-
+//
 // To override the string view type used by the library, do the following:
 //
 // #define RDIM_STRING8_OVERRIDE
 // #define RDIM_String8 <name of your string type here>
 // #define RDIM_String8_BaseMember <name of base pointer member>
 // #define RDIM_String8_SizeMember <name of size member>
-
+//
 // To override the string view list type used by the library, do the following:
 //
 // #define RDIM_STRING8LIST_OVERRIDE
@@ -119,7 +119,15 @@ enum
 
 ////////////////////////////////
 //~ rjf: Overrideable Arena Allocator Types
-
+//
+// All allocations done by the library are done via an "arena allocator", which
+// is a simple linear (or bump, or stack) allocator. This allocator type can be
+// overridden by user code, so that the library works with your own allocator
+// types, if that is preferable.
+//
+// Arenas are always referred to opaquely by the library with a small set of
+// functions, documented in the overriding instructions below.
+//
 // To override the arena allocator type used by the library, do the following:
 //
 // #define RDIM_ARENA_OVERRIDE
@@ -161,7 +169,7 @@ struct RDIM_Arena
 
 ////////////////////////////////
 //~ rjf: Overrideable Thread-Local Scratch Arenas
-
+//
 // To override the default thread-local scratch arenas used by the library,
 // do the following:
 //
@@ -190,8 +198,40 @@ struct RDIM_Temp
 #endif
 
 ////////////////////////////////
-//~ rjf: Overrideable Profile Markup
+//~ rjf: Overrideable Asynchronous Hash-Access Guard Type
 
+#if !defined(RDIM_Guard)
+# define RDIM_Guard RDIM_Guard
+typedef struct RDIM_Guard RDIM_Guard;
+struct RDIM_Guard
+{
+  RDIM_Arena *arena;
+};
+#endif
+
+#if !defined(rdim_guard_scope_begin_r)
+# define rdim_guard_scope_begin_r rdim_guard_scope_noop
+#endif
+#if !defined(rdim_guard_scope_end_r)
+# define rdim_guard_scope_end_r rdim_guard_scope_noop
+#endif
+#if !defined(rdim_guard_scope_begin_w)
+# define rdim_guard_scope_begin_w rdim_guard_scope_noop
+#endif
+#if !defined(rdim_guard_scope_end_w)
+# define rdim_guard_scope_end_w rdim_guard_scope_noop
+#endif
+#if !defined(rdim_arena_from_guard_hash)
+# define rdim_arena_from_guard_hash(g, hash) ((g)->arena)
+#endif
+
+#define RDIM_GuardScopeR(guard, hash)         for(int _i_ = ((rdim_guard_scope_begin_r((guard), (hash))), 0); !_i_; _i_ += 1, (rdim_guard_scope_end_r((guard), (hash))))
+#define RDIM_GuardScopeW(guard, hash)         for(int _i_ = ((rdim_guard_scope_begin_w((guard), (hash))), 0); !_i_; _i_ += 1, (rdim_guard_scope_end_w((guard), (hash))))
+#define RDIM_GuardScopeRWPromote(guard, hash) for(int _i_ = ((rdim_guard_scope_end_r((guard), (hash)), rdim_guard_scope_begin_w((guard), (hash))), 0); !_i_; _i_ += 1, (rdim_guard_scope_end_w((guard), (hash)), rdim_guard_scope_begin_r((guard), (hash))))
+
+////////////////////////////////
+//~ rjf: Overrideable Profile Markup
+//
 // To override the default profiling markup, do the following:
 //
 // #define RDIM_ProfBegin(...) <some expression, like a function call, to begin profiling some zone>
@@ -843,19 +883,22 @@ struct RDIM_BakeSectionList
 typedef struct RDIM_BakeStringNode RDIM_BakeStringNode;
 struct RDIM_BakeStringNode
 {
-  RDIM_BakeStringNode *hash_next;
-  RDIM_BakeStringNode *order_next;
-  RDIM_String8 string;
+  RDIM_BakeStringNode *next;
   RDI_U64 hash;
-  RDI_U32 idx;
+  RDIM_String8 string;
+};
+
+typedef struct RDIM_BakeStringSlot RDIM_BakeStringSlot;
+struct RDIM_BakeStringSlot
+{
+  RDIM_BakeStringNode *first;
+  RDI_U64 count;
 };
 
 typedef struct RDIM_BakeStringMap RDIM_BakeStringMap;
 struct RDIM_BakeStringMap
 {
-  RDIM_BakeStringNode *order_first;
-  RDIM_BakeStringNode *order_last;
-  RDIM_BakeStringNode **slots;
+  RDIM_BakeStringSlot **slots;
   RDI_U64 slots_count;
   RDI_U64 slot_collision_count;
   RDI_U32 count;
@@ -990,9 +1033,14 @@ RDI_PROC void rdim_arena_pop_to_fallback(RDIM_Arena *arena, RDI_U64 pos);
 #define rdim_push_array(a,T,c) (T*)rdim_memzero(rdim_push_array_no_zero(a,T,c), sizeof(T)*(c))
 
 //- rjf: thread-local scratch arenas
-#if !defined (RDIM_SCRATCH_OVERRIDE)
+#if !defined(RDIM_SCRATCH_OVERRIDE)
 RDI_PROC RDIM_Temp rdim_scratch_begin_fallback(RDIM_Arena **conflicts, RDI_U64 conflicts_count);
 RDI_PROC void rdim_scratch_end_fallback(RDIM_Temp temp);
+#endif
+
+//- rjf: asynchronous guard
+#if !defined(RDIM_GUARD_OVERRIDE)
+RDI_PROC void rdim_guard_scope_noop(RDIM_Guard *guard, U64 hash);
 #endif
 
 //- rjf: strings
@@ -1097,8 +1145,9 @@ RDI_PROC RDIM_BakeVMap rdim_bake_vmap_from_markers(RDIM_Arena *arena, RDIM_VMapM
 //~ rjf: [Baking Helpers] Interned / Deduplicated Blob Data Structure Helpers
 
 //- rjf: bake string map reading/writing
+RDI_PROC RDIM_BakeStringMap *rdim_bake_string_map_make(RDIM_Arena *arena, RDI_U64 slot_count);
+RDI_PROC void rdim_bake_string_map_insert(RDIM_Guard *guard, RDIM_BakeStringMap *map, RDIM_String8 string);
 RDI_PROC RDI_U32 rdim_bake_idx_from_string(RDIM_BakeStringMap *map, RDIM_String8 string);
-RDI_PROC RDI_U32 rdim_bake_string_map_insert(RDIM_Arena *arena, RDIM_BakeStringMap *map, RDIM_String8 string);
 
 //- rjf: bake idx run map reading/writing
 RDI_PROC RDI_U64 rdim_hash_from_idx_run(RDI_U32 *idx_run, RDI_U32 count);
@@ -1123,8 +1172,16 @@ RDI_PROC void rdim_bake_section_list_concat_in_place(RDIM_BakeSectionList *dst, 
 ////////////////////////////////
 //~ rjf: [Baking] Build Artifacts -> Interned/Deduplicated Data Structures
 
-//- rjf: bake string map building
-RDI_PROC RDIM_BakeStringMap *rdim_bake_string_map_from_params(RDIM_Arena *arena, RDIM_BakePathTree *path_tree, RDIM_BakeParams *params);
+//- rjf: independent bake string map building workloads
+RDI_PROC void rdim_bake_string_map_push_top_level_info(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_TopLevelInfo *top_level_info);
+RDI_PROC void rdim_bake_string_map_push_binary_sections(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_BinarySectionList *binary_sections);
+RDI_PROC void rdim_bake_string_map_push_src_file_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_SrcFileChunkNode *chunk);
+RDI_PROC void rdim_bake_string_map_push_unit_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_UnitChunkNode *chunk);
+RDI_PROC void rdim_bake_string_map_push_type_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_TypeChunkNode *chunk);
+RDI_PROC void rdim_bake_string_map_push_udt_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_UDTChunkNode *chunk);
+RDI_PROC void rdim_bake_string_map_push_bake_path_tree(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_BakePathTree *path_tree);
+RDI_PROC void rdim_bake_string_map_push_symbol_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_SymbolChunkNode *chunk);
+RDI_PROC void rdim_bake_string_map_push_scope_chunk(RDIM_Guard *guard, RDIM_BakeStringMap *strings, RDIM_ScopeChunkNode *chunk);
 
 //- rjf: bake name map building
 RDI_PROC RDIM_BakeNameMap *rdim_bake_name_map_from_kind_params(RDIM_Arena *arena, RDI_NameMapKind kind, RDIM_BakeParams *params);
