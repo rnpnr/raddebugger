@@ -16,7 +16,7 @@ dasm_inst_from_code(Arena *arena, Arch arch, U64 vaddr, String8 code, DASM_Synta
   switch(arch)
   {
     default:{}break;
-    
+
     //- rjf: x86/x64 disassembly
     case Arch_x86:
     case Arch_x64:
@@ -29,11 +29,11 @@ dasm_inst_from_code(Arena *arena, Arch arch, U64 vaddr, String8 code, DASM_Synta
         case DASM_Syntax_Intel:{style = ZYDIS_FORMATTER_STYLE_INTEL;}break;
         case DASM_Syntax_ATT:  {style = ZYDIS_FORMATTER_STYLE_ATT;}break;
       }
-      
+
       // rjf: disassemble one instruction
       ZydisDisassembledInstruction zinst = {0};
       ZyanStatus status = ZydisDisassemble(ZYDIS_MACHINE_MODE_LONG_64, vaddr, code.str, code.size, &zinst, style);
-      
+
       // rjf: analyze
       DASM_InstFlags flags = 0;
       U64 jump_dest_vaddr = 0;
@@ -70,7 +70,7 @@ dasm_inst_from_code(Arena *arena, Arch arch, U64 vaddr, String8 code, DASM_Synta
           {
             flags |= DASM_InstFlag_Call;
           }break;
-          
+
           case ZYDIS_MNEMONIC_JB:
           case ZYDIS_MNEMONIC_JBE:
           case ZYDIS_MNEMONIC_JCXZ:
@@ -98,30 +98,30 @@ dasm_inst_from_code(Arena *arena, Arch arch, U64 vaddr, String8 code, DASM_Synta
           {
             flags |= DASM_InstFlag_Branch;
           }break;
-          
+
           case ZYDIS_MNEMONIC_JMP:
           {
             flags |= DASM_InstFlag_UnconditionalJump;
           }break;
-          
+
           case ZYDIS_MNEMONIC_RET:
           {
             flags |= DASM_InstFlag_Return;
           }break;
-          
+
           case ZYDIS_MNEMONIC_PUSH:
           case ZYDIS_MNEMONIC_POP:
           {
             flags |= DASM_InstFlag_ChangesStackPointer;
           }break;
-          
+
           default:
           {
             flags |= DASM_InstFlag_NonFlow;
           }break;
         }
       }
-      
+
       // rjf: convert
       {
         inst.flags           = flags;
@@ -391,7 +391,7 @@ dasm_info_from_hash_params(DASM_Scope *scope, U128 hash, DASM_Params *params)
         }
         if(node == 0)
         {
-          LogInfoNamedBlockF("dasm_new_node")
+          LogInfoNamedBlock("dasm_new_node")
           {
             log_infof("hash:        [0x%I64x 0x%I64x]\n", hash.u64[0], hash.u64[1]);
             log_infof("vaddr:       0x%I64x\n", params->vaddr);
@@ -525,19 +525,19 @@ dasm_parse_thread__entry_point(void *p)
     HS_Scope *hs_scope = hs_scope_open();
     DI_Scope *di_scope = di_scope_open();
     TXT_Scope *txt_scope = txt_scope_open();
-    
+
     //- rjf: get next request
     U128 hash = {0};
     DASM_Params params = {0};
     dasm_u2p_dequeue_req(scratch.arena, &hash, &params);
     U64 change_gen = fs_change_gen();
-    
+
     //- rjf: unpack hash
     U64 slot_idx = hash.u64[1]%dasm_shared->slots_count;
     U64 stripe_idx = slot_idx%dasm_shared->stripes_count;
     DASM_Slot *slot = &dasm_shared->slots[slot_idx];
     DASM_Stripe *stripe = &dasm_shared->stripes[stripe_idx];
-    
+
     //- rjf: take task
     B32 got_task = 0;
     OS_MutexScopeR(stripe->rw_mutex)
@@ -551,21 +551,21 @@ dasm_parse_thread__entry_point(void *p)
         }
       }
     }
-    
+
     //- rjf: get dbg info
     RDI_Parsed *rdi = &di_rdi_parsed_nil;
     if(got_task && params.dbgi_key.path.size != 0)
     {
       rdi = di_rdi_from_key(di_scope, &params.dbgi_key, max_U64);
     }
-    
+
     //- rjf: hash -> data
     String8 data = {0};
     if(got_task)
     {
       data = hs_data_from_hash(hs_scope, hash);
     }
-    
+
     //- rjf: data * arch * addr * dbg -> decode artifacts
     DASM_LineChunkList line_list = {0};
     String8List inst_strings = {0};
@@ -574,7 +574,7 @@ dasm_parse_thread__entry_point(void *p)
       switch(params.arch)
       {
         default:{}break;
-        
+
         //- rjf: x86/x64 decoding
         case Arch_x64:
         case Arch_x86:
@@ -590,7 +590,7 @@ dasm_parse_thread__entry_point(void *p)
             {
               break;
             }
-            
+
             // rjf: push strings derived from voff -> line info
             if(params.style_flags & (DASM_StyleFlag_SourceFilesNames|DASM_StyleFlag_SourceLines))
             {
@@ -671,7 +671,7 @@ dasm_parse_thread__entry_point(void *p)
                 }
               }
             }
-            
+
             // rjf: push line
             String8 addr_part = {0};
             if(params.style_flags & DASM_StyleFlag_Addresses)
@@ -719,14 +719,14 @@ dasm_parse_thread__entry_point(void *p)
                                                                                          inst_strings.total_size + inst_strings.node_count + inst_string.size)};
             dasm_line_chunk_list_push(scratch.arena, &line_list, 1024, &line);
             str8_list_push(scratch.arena, &inst_strings, inst_string);
-            
+
             // rjf: increment
             off += inst.size;
           }
         }break;
       }
     }
-    
+
     //- rjf: artifacts -> value bundle
     Arena *info_arena = 0;
     DASM_Info info = {0};
@@ -737,7 +737,7 @@ dasm_parse_thread__entry_point(void *p)
       StringJoin text_join = {0};
       text_join.sep = str8_lit("\n");
       String8 text = str8_list_join(text_arena, &inst_strings, &text_join);
-      
+
       //- rjf: produce unique key for this disassembly's text
       U128 text_key = {0};
       {
@@ -754,16 +754,16 @@ dasm_parse_thread__entry_point(void *p)
         };
         text_key = hs_hash_from_data(str8((U8 *)hash_data, sizeof(hash_data)));
       }
-      
+
       //- rjf: submit text data to hash store
       U128 text_hash = hs_submit_data(text_key, &text_arena, text);
-      
+
       //- rjf: produce value bundle
       info_arena = arena_alloc();
       info.text_key = text_key;
       info.lines = dasm_line_array_from_chunk_list(info_arena, &line_list);
     }
-    
+
     //- rjf: commit results to cache
     if(got_task) OS_MutexScopeW(stripe->rw_mutex)
     {
@@ -787,7 +787,7 @@ dasm_parse_thread__entry_point(void *p)
         }
       }
     }
-    
+
     txt_scope_close(txt_scope);
     di_scope_close(di_scope);
     hs_scope_close(hs_scope);

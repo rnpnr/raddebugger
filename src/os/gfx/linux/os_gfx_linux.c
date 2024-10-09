@@ -30,12 +30,12 @@ os_gfx_init(void)
   os_lnx_gfx_state = push_array(arena, OS_LNX_GfxState, 1);
   os_lnx_gfx_state->arena = arena;
   os_lnx_gfx_state->display = XOpenDisplay(0);
-  
+
   //- rjf: calculate atoms
   os_lnx_gfx_state->wm_delete_window_atom        = XInternAtom(os_lnx_gfx_state->display, "WM_DELETE_WINDOW", 0);
   os_lnx_gfx_state->wm_sync_request_atom         = XInternAtom(os_lnx_gfx_state->display, "_NET_WM_SYNC_REQUEST", 0);
   os_lnx_gfx_state->wm_sync_request_counter_atom = XInternAtom(os_lnx_gfx_state->display, "_NET_WM_SYNC_REQUEST_COUNTER", 0);
-  
+
   //- rjf: fill out gfx info
   os_lnx_gfx_state->gfx_info.double_click_time = 0.5f;
   os_lnx_gfx_state->gfx_info.caret_blink_time = 0.5f;
@@ -57,7 +57,7 @@ os_get_gfx_info(void)
 internal void
 os_set_clipboard_text(String8 string)
 {
-  
+
 }
 
 internal String8
@@ -85,7 +85,7 @@ os_window_open(Vec2F32 resolution, OS_WindowFlags flags, String8 title)
   }
   MemoryZeroStruct(w);
   DLLPushBack(os_lnx_gfx_state->first_window, os_lnx_gfx_state->last_window, w);
-  
+
   //- rjf: create window & equip with x11 info
   w->window = XCreateWindow(os_lnx_gfx_state->display,
                             XDefaultRootWindow(os_lnx_gfx_state->display),
@@ -116,13 +116,13 @@ os_window_open(Vec2F32 resolution, OS_WindowFlags flags, String8 title)
     w->counter_xid = XSyncCreateCounter(os_lnx_gfx_state->display, initial_value);
   }
   XChangeProperty(os_lnx_gfx_state->display, w->window, os_lnx_gfx_state->wm_sync_request_counter_atom, XA_CARDINAL, 32, PropModeReplace, (U8 *)&w->counter_xid, 1);
-  
+
   //- rjf: attach name
   Temp scratch = scratch_begin(0, 0);
   String8 title_copy = push_str8_copy(scratch.arena, title);
   XStoreName(os_lnx_gfx_state->display, w->window, (char *)title_copy.str);
   scratch_end(scratch);
-  
+
   //- rjf: convert to handle & return
   OS_Handle handle = {(U64)w};
   return handle;
@@ -184,13 +184,16 @@ os_window_set_maximized(OS_Handle handle, B32 maximized)
 internal B32
 os_window_is_minimized(OS_Handle window)
 {
-  if(os_handle_match(handle, os_handle_zero())) {return 0;}
+  if(os_handle_match(window, os_handle_zero())) {return 0;}
+  NotImplemented;
+  return 0;
 }
 
 internal void
 os_window_set_minimized(OS_Handle window, B32 minimized)
 {
-  if(os_handle_match(handle, os_handle_zero())) {return;}
+  if(os_handle_match(window, os_handle_zero())) {return;}
+  NotImplemented;
 }
 
 internal void
@@ -289,7 +292,7 @@ os_dim_from_monitor(OS_Handle monitor)
 internal void
 os_send_wakeup_event(void)
 {
-  
+
 }
 
 internal OS_EventList
@@ -303,7 +306,7 @@ os_get_events(Arena *arena, B32 wait)
     switch(evt.type)
     {
       default:{}break;
-      
+
       //- rjf: key presses/releases
       case KeyPress:
       case KeyRelease:
@@ -313,10 +316,10 @@ os_get_events(Arena *arena, B32 wait)
         if(evt.xkey.state & ShiftMask)   { flags |= OS_Modifier_Shift; }
         if(evt.xkey.state & ControlMask) { flags |= OS_Modifier_Ctrl; }
         if(evt.xkey.state & Mod1Mask)    { flags |= OS_Modifier_Alt; }
-        
+
         // rjf: map keycode -> keysym
         U32 keysym = XLookupKeysym(&evt.xkey, 0);
-        
+
         // rjf: map keysym -> OS_Key
         OS_Key key = OS_Key_Null;
         switch(keysym)
@@ -366,15 +369,15 @@ os_get_events(Arena *arena, B32 wait)
           case 'z':case 'Z':{key = OS_Key_Z;}break;
           case ' ':{key = OS_Key_Space;}break;
         }
-        
+
         // rjf: push event
         OS_LNX_Window *window = os_lnx_window_from_x11window(evt.xclient.window);
         OS_Event *e = os_event_list_push_new(arena, &evts, evt.type == KeyPress ? OS_EventKind_Press : OS_EventKind_Release);
         e->window.u64[0] = (U64)window;
-        e->flags = flags;
+        e->modifiers = flags;
         e->key = key;
       }break;
-      
+
       //- rjf: mouse button presses/releases
       case ButtonPress:
       case ButtonRelease:
@@ -384,7 +387,7 @@ os_get_events(Arena *arena, B32 wait)
         if(evt.xbutton.state & ShiftMask)   { flags |= OS_Modifier_Shift; }
         if(evt.xbutton.state & ControlMask) { flags |= OS_Modifier_Ctrl; }
         if(evt.xbutton.state & Mod1Mask)    { flags |= OS_Modifier_Alt; }
-        
+
         // rjf: map button -> OS_Key
         OS_Key key = OS_Key_Null;
         switch(evt.xbutton.button)
@@ -394,15 +397,15 @@ os_get_events(Arena *arena, B32 wait)
           case Button2:{key = OS_Key_MiddleMouseButton;}break;
           case Button3:{key = OS_Key_RightMouseButton;}break;
         }
-        
+
         // rjf: push event
         OS_LNX_Window *window = os_lnx_window_from_x11window(evt.xclient.window);
         OS_Event *e = os_event_list_push_new(arena, &evts, evt.type == ButtonPress ? OS_EventKind_Press : OS_EventKind_Release);
         e->window.u64[0] = (U64)window;
-        e->flags = flags;
+        e->modifiers = flags;
         e->key = key;
       }break;
-      
+
       //- rjf: mouse motion
       case MotionNotify:
       {
@@ -412,14 +415,14 @@ os_get_events(Arena *arena, B32 wait)
         e->pos.x = (F32)evt.xmotion.x;
         e->pos.y = (F32)evt.xmotion.y;
       }break;
-      
+
       //- rjf: window focus/unfocus
       case FocusIn:
       case FocusOut:
       {
-        
+
       }break;
-      
+
       //- rjf: client messages
       case ClientMessage:
       {
@@ -472,7 +475,7 @@ os_mouse_from_window(OS_Handle handle)
 internal void
 os_set_cursor(OS_Cursor cursor)
 {
-  
+
 }
 
 ////////////////////////////////
@@ -481,7 +484,7 @@ os_set_cursor(OS_Cursor cursor)
 internal void
 os_graphical_message(B32 error, String8 title, String8 message)
 {
-  
+
 }
 
 ////////////////////////////////
@@ -490,5 +493,5 @@ os_graphical_message(B32 error, String8 title, String8 message)
 internal void
 os_show_in_filesystem_ui(String8 path)
 {
-  
+
 }
